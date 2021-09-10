@@ -1,2 +1,9 @@
+# User files
+/box/aker/*
+
+# Include zshrc
+!/box/aker/.zshrc
+
+# Shell binaries
 /shell
 /src/**/*.o

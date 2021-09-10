@@ -13,11 +13,15 @@
 #include <errno.h>
 #include <grp.h>
 
-static void prepare_procfs();
-static void prepare_mntns(char *rootfs);
+#define STACKSIZE   (1024 * 1024)
 
-#define STACKSIZE (1024*1024)
 static char cmd_stack[STACKSIZE];
+
+typedef struct
+{
+    char    **env;
+    int     fds[2];
+} isolated_t;
 
 static void die(const char *fmt, ...)
 {
@@ -29,63 +33,26 @@ static void die(const char *fmt, ...)
     exit(1);
 }
 
-void await_setup(int pipe)
+static void write_file(char path[100], char line[100])
+{
+    FILE *f = fopen(path, "w");
+
+    if (f == NULL)
+        die("Failed to open file %s: %m\n", path);
+
+    if (fwrite(line, 1, strlen(line), f) < 0)
+        die("Failed to write to file %s:\n", path);
+
+    if (fclose(f) != 0)
+        die("Failed to close file %s: %m\n", path);
+}
+
+static void await_setup(int pipe)
 {
     char buf[2];
 
     if (read(pipe, buf, 2) != 2)
         die("Failed to read from pipe: %m\n");
-}
-
-static int cmd_exec(void *arg)
-{
-    int *fds = (int*)arg;
-
-    // Kill the cmd process if the isolate process dies.
-    if (prctl(PR_SET_PDEATHSIG, SIGKILL))
-        die("cannot PR_SET_PDEATHSIG for child process: %m\n");
-
-    // if (setgroups(0, NULL))
-    //     die("Failed to setgroups: %m\n");
-
-    // Wait for 'setup done' signal from the main process.
-    await_setup(fds[0]);
-
-    // Mount user home directory.
-    prepare_mntns("/home/challenges/box");
-
-    // Assuming, 0 in the current namespace maps to
-    // a non-privileged UID in the parent namespace,
-    // drop superuser privileges if any by enforcing
-    // the exec'ed process runs with UID 0.
-    if (setgid(1000) == -1)
-        die("Failed to setgid: %m\n");
-
-    if (setuid(1000) == -1)
-        die("Failed to setuid: %m\n");
-
-    if (execvp("/bin/zsh", (char*[]){ "/bin/zsh", NULL }) == -1)
-        die("Failed to exec user shell: %m\n");
-
-    die("NOOOOW !");
-    return (1);
-}
-
-static void write_file(char path[100], char line[100])
-{
-    FILE *f = fopen(path, "w");
-
-    if (f == NULL) {
-        die("Failed to open file %s: %m\n", path);
-    }
-
-    if (fwrite(line, 1, strlen(line), f) < 0) {
-        die("Failed to write to file %s:\n", path);
-    }
-
-    if (fclose(f) != 0) {
-        die("Failed to close file %s: %m\n", path);
-    }
 }
 
 static void prepare_userns(int pid)
@@ -128,12 +95,43 @@ static void prepare_mntns(char *rootfs)
         die("Failed to unmount rootfs: %m\n");
 }
 
+static int cmd_exec(void *arg)
+{
+    isolated_t *isolated = (isolated_t*)arg;
+
+    // Kill the cmd process if the isolate process dies.
+    if (prctl(PR_SET_PDEATHSIG, SIGKILL))
+        die("cannot PR_SET_PDEATHSIG for child process: %m\n");
+
+    // Wait for 'setup done' signal from the main process.
+    await_setup(isolated->fds[0]);
+
+    // Mount user home directory.
+    prepare_mntns("/home/challenges/box");
+
+    // Assuming, 0 in the current namespace maps to
+    // a non-privileged UID in the parent namespace,
+    // drop superuser privileges if any by enforcing
+    // the exec'ed process runs with UID 0.
+    if (setgid(1000) == -1)
+        die("Failed to setgid: %m\n");
+
+    if (setuid(1000) == -1)
+        die("Failed to setuid: %m\n");
+
+    if (execvpe("/bin/zsh", (char*[]){ "/bin/zsh", NULL }, isolated->env) == -1)
+        die("Failed to exec user shell: %m\n");
+
+    die("NOOOOW !");
+    return (1);
+}
+
 int main(int argc, char **argv, char **env)
 {
-    int fds[2];
-    
-    for (int i = 0; env[i]; i++)
-        puts(env[i]);
+    isolated_t isolated = {
+        .env = env,
+        .fds = { 0 }
+    };
 
     // Set root permission.
     if (setgid(0) == -1)
@@ -143,7 +141,7 @@ int main(int argc, char **argv, char **env)
         die("Failed to setuid: %m\n");
 
     // Create pipe to communicate between main and command process.
-    if (pipe(fds) < 0)
+    if (pipe(isolated.fds) < 0)
         die("Failed to create pipe: %m");
 
     // Clone command process.
@@ -153,23 +151,16 @@ int main(int argc, char **argv, char **env)
             SIGCHLD |
             CLONE_NEWUTS | CLONE_NEWUSER | CLONE_NEWNS | CLONE_NEWPID;
 
-    int cmd_pid = clone(cmd_exec, cmd_stack + STACKSIZE, clone_flags, &fds);
+    int cmd_pid = clone(cmd_exec, cmd_stack + STACKSIZE, clone_flags, &isolated);
 
     if (cmd_pid < 0)
         die("Failed to clone: %m\n");
 
     // Get the writable end of the pipe.
-    int pipe = fds[1];
+    int pipe = isolated.fds[1];
 
     // Some namespace setup will take place here ...
     prepare_userns(cmd_pid);
-
-    // Set back user permission.
-    if (setgid(1000) == -1)
-        die("Failed to setgid: %m\n");
-
-    if (setuid(1000) == -1)
-        die("Failed to setuid: %m\n");
 
     // Signal to the command process we're done with setup.
     if (write(pipe, "OK", 2) != 2)
@@ -181,5 +172,5 @@ int main(int argc, char **argv, char **env)
     if (waitpid(cmd_pid, NULL, 0) == -1)
         die("Failed to wait pid %d: %m\n", cmd_pid);
 
-    return 0;
+    return (0);
 }
