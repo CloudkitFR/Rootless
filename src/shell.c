@@ -107,7 +107,7 @@ static int cmd_exec(void *arg)
     await_setup(isolated->fds[0]);
 
     // Mount user home directory.
-    prepare_mntns("/home/challenges/box");
+    prepare_mntns("box");
 
     // Assuming, 0 in the current namespace maps to
     // a non-privileged UID in the parent namespace,
