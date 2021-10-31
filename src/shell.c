@@ -19,7 +19,6 @@ static char cmd_stack[STACKSIZE];
 
 typedef struct
 {
-    char    **env;
     int     fds[2];
 } isolated_t;
 
@@ -58,20 +57,15 @@ static void await_setup(int pipe)
 static void prepare_userns(int pid)
 {
     char path[100];
-    char line[100];
-    int uid = 1000;
 
     sprintf(path, "/proc/%d/uid_map", pid);
-    sprintf(line, "1000 %d 1\n", uid);
-    write_file(path, line);
+    write_file(path, "0 1000 1\n");
 
     sprintf(path, "/proc/%d/setgroups", pid);
-    sprintf(line, "deny");
-    write_file(path, line);
+    write_file(path, "deny");
 
     sprintf(path, "/proc/%d/gid_map", pid);
-    sprintf(line, "1000 %d 1\n", uid);
-    write_file(path, line);
+    write_file(path, "0 1000 1\n");
 }
 
 static void prepare_mntns(char *rootfs)
@@ -91,6 +85,12 @@ static void prepare_mntns(char *rootfs)
     if (mount("proc", "/proc", "proc", 0, ""))
         die("Failed to mount proc: %m\n");
 
+    if (mount("devpts", "/dev/pts", "devpts", 0, "gid=0,mode=620"))
+        die("Failed to mount devpts: %m\n");
+
+    if (mount("tmpfs", "/dev/shm", "tmpfs", 0, ""))
+        die("Failed to mount shm: %m\n");
+
     if (umount2(".", MNT_DETACH))
         die("Failed to unmount rootfs: %m\n");
 }
@@ -107,38 +107,28 @@ static int cmd_exec(void *arg)
     await_setup(isolated->fds[0]);
 
     // Mount user home directory.
-    prepare_mntns("box");
+    prepare_mntns("/opt/alphabet/Rootless/box");
 
     // Assuming, 0 in the current namespace maps to
     // a non-privileged UID in the parent namespace,
     // drop superuser privileges if any by enforcing
     // the exec'ed process runs with UID 0.
-    if (setgid(1000) == -1)
+    if (setuid(0) == -1 || setgid(0) == -1)
         die("Failed to setgid: %m\n");
 
-    if (setuid(1000) == -1)
-        die("Failed to setuid: %m\n");
-
-    if (execvpe("/bin/zsh", (char*[]){ "/bin/zsh", NULL }, isolated->env) == -1)
+    if (execvpe(
+        "/bin/zsh",
+        (char*[]){ "/bin/zsh", NULL },
+        (char*[]){ "USER=aker", "HOME=/aker", "SHELL=/bin/zsh", "PATH=/usr/bin:/bin", "TERM=xterm", NULL }) == -1)
         die("Failed to exec user shell: %m\n");
 
     die("NOOOOW !");
     return (1);
 }
 
-int main(int argc, char **argv, char **env)
+int main(int argc, char **argv)
 {
-    isolated_t isolated = {
-        .env = env,
-        .fds = { 0 }
-    };
-
-    // Set root permission.
-    if (setgid(0) == -1)
-        die("Failed to setgid: %m\n");
-
-    if (setuid(0) == -1)
-        die("Failed to setuid: %m\n");
+    isolated_t isolated = { 0 };
 
     // Create pipe to communicate between main and command process.
     if (pipe(isolated.fds) < 0)
