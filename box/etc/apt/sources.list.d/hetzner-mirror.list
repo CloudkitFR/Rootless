@@ -1,3 +1,0 @@
-deb http://mirror.hetzner.de/debian/packages bullseye main contrib non-free
-deb http://mirror.hetzner.de/debian/packages bullseye-updates main contrib non-free
-deb http://mirror.hetzner.de/debian/packages bullseye-backports main contrib non-free

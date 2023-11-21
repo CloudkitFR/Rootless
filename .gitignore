@@ -1,17 +1,8 @@
-# Ignore user files
-/box/aker/*
+# Ignore box
+box/
 
-# Include zshrc
-!/box/aker/.zshrc
-
-# Ignore apt
-
-box/var/cache/apt/pkgcache.bin
-box/var/cache/apt/srcpkgcache.bin
-box/var/cache/apt/archives
-box/var/lib/apt/lists
-box/var/lib/dpkg/lock
-box/var/lib/dpkg/lock-frontend
+# VS Code files
+.vscode
 
 # Shell binaries
 /shell
